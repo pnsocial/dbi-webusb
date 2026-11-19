@@ -31,7 +31,7 @@ python3 -m http.server 8000
 3. Thêm file hoặc thư mục, bấm **Kết nối Switch** và chọn thiết bị.
 4. Trên Switch, chọn file cần cài.
 
-Dự án chỉ gồm một file [`index.html`](index.html), không có bước build.
+Dự án chỉ gồm một file [`public/index.html`](public/index.html), không có bước build.
 
 ## Lưu ý
 
