@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DBI WebUSB</title>
+<style>
+  :root{--bg:#0f1115;--card:#181b22;--line:#2a2f3a;--tx:#e6e8ee;--mut:#8b93a5;--acc:#e60012;--ok:#2ecc71;--warn:#f5a623;--err:#ff5c5c}
+  @media (prefers-color-scheme: light){:root{--bg:#f4f5f8;--card:#fff;--line:#dcdfe6;--tx:#1b1e26;--mut:#667085}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  main{max-width:900px;margin:0 auto;padding:24px 16px 48px;display:grid;gap:16px}
+  h1{margin:0;font-size:20px} h1 span{color:var(--acc)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .sp{flex:1}
+  button{font:inherit;border:1px solid var(--line);background:transparent;color:var(--tx);padding:7px 14px;border-radius:8px;cursor:pointer}
+  button:hover:not(:disabled){border-color:var(--mut)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+  label.chk{display:flex;gap:6px;align-items:center;color:var(--mut);cursor:pointer;user-select:none}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--mut);display:inline-block}
+  .dot.on{background:var(--ok)} .dot.busy{background:var(--warn)} .dot.bad{background:var(--err)}
+  #drop{border:2px dashed var(--line);border-radius:12px;padding:28px;text-align:center;color:var(--mut);cursor:pointer;transition:.15s}
+  #drop.over{border-color:var(--acc);color:var(--tx);background:rgba(230,0,18,.06)}
+  .file{padding:10px 0;border-top:1px solid var(--line)}
+  .file:first-child{border-top:0}
+  .bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:6px}
+  .bar>i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+  .file.done .bar>i{background:var(--ok)}
+  .name{word-break:break-word;font-weight:600}
+  .tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+  .tag{font-size:11px;padding:1px 8px;border-radius:10px;border:1px solid var(--line);color:var(--mut)}
+  .tag.mono{font-family:ui-monospace,Menlo,monospace}
+  .tag.base{color:var(--ok);border-color:var(--ok)} .tag.upd{color:var(--warn);border-color:var(--warn)} .tag.dlc{color:#6aa8ff;border-color:#6aa8ff}
+  .meta{color:var(--mut);font-size:12px}
+  .file.done .meta{color:var(--ok)}
+  .x{padding:2px 8px;font-size:12px}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+  .stat b{display:block;font-size:20px;font-variant-numeric:tabular-nums;word-break:break-all} .stat span{color:var(--mut);font-size:12px}
+  #log{height:220px;overflow:auto;background:#0a0c10;color:#c9d1d9;border-radius:8px;padding:10px;font:12px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap}
+  #log .e{color:#ff7b7b} #log .w{color:#f5c26b} #log .o{color:#6fdc8c}
+  #banner{display:none;border-color:var(--err);color:var(--err)}
+  #err{display:none;border-color:var(--err)} #err b{color:var(--err)}
+</style>
+</head>
+<body>
+<main>
+  <div class="row"><h1><span>DBI</span> WebUSB Backend</h1><span class="sp"></span>
+    <span class="dot" id="dot"></span><span id="status">Chưa kết nối</span></div>
+
+  <div class="card" id="banner">Trình duyệt này không hỗ trợ WebUSB hoặc trang không chạy trong secure context. Dùng Chrome/Edge và mở qua <code>http://localhost</code> (vd. <code>python3 -m http.server 8000</code>).</div>
+  <div class="card" id="err"><b id="errTitle"></b><div id="errBody" style="margin-top:4px"></div></div>
+
+  <div class="card">
+    <div class="row">
+      <button class="pri" id="btnConnect">Kết nối Switch</button>
+      <button id="btnStop" disabled>Ngắt / Dừng</button>
+      <label class="chk"><input type="checkbox" id="chkAuto" checked> Tự kết nối lại</label>
+      <span class="sp"></span>
+      <span class="meta">Trên Switch: mở DBI → "Run MTP/USB" (chế độ cài từ USB).</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="drop">Kéo thả file hoặc thư mục <b>.nsp .nsz .xci .xcz</b> vào đây, hoặc bấm để chọn file</div>
+    <input id="pick" type="file" multiple accept=".nsp,.nsz,.xci,.xcz" hidden>
+    <div class="row" style="margin-top:10px">
+      <span class="meta" id="count">0 file</span><span class="sp"></span>
+      <button id="btnRestore" style="display:none"></button>
+      <button id="btnDir">Thêm thư mục</button>
+      <button id="btnClear">Xoá danh sách</button>
+    </div>
+    <div id="files" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card stats">
+    <div class="stat"><b id="sSpeed">0.0 MB/s</b><span>Tốc độ</span></div>
+    <div class="stat"><b id="sEta">—</b><span>Còn lại (cả hàng đợi)</span></div>
+    <div class="stat"><b id="sTotal">0 B</b><span>Đã gửi (phiên này)</span></div>
+    <div class="stat"><b id="sCur">—</b><span>Đang gửi</span></div>
+  </div>
+
+  <div class="card"><div id="log"></div></div>
+</main>
+
+<script>
+'use strict';
+// ---- Giao thức DBI (khớp dbibackend.py) ----
+const VID = 0x057e, PID = 0x3000;
+const CMD_EXIT = 0, CMD_FILE_RANGE = 2, CMD_LIST = 3;
+const T_RESPONSE = 1, T_ACK = 2;
+const CHUNK = 4 * 1024 * 1024;           // kích thước mỗi lần slice()/transferOut
+const MAX_LOG = 1000;
+const IDLE_DONE_MS = 4000;               // im lặng từng này ms sau khi gửi xong => coi là hoàn tất
+const EXT = /\.(nsp|nsz|xci|xcz)$/i;
+
+const $ = id => document.getElementById(id);
+const files = new Map();                 // tên -> {file, handle, sent, el, t0, tLast, done, dur}
+const dirHandles = new Map();            // tên thư mục -> handle (để quét lại)
+let dev = null, epIn = 0, epOut = 0, mps = 512, ifaceNum = -1;
+let running = false, session = 0;
+let totalSent = 0, speedMark = {t: performance.now(), b: 0}, emaSpeed = 0;
+let lastCmd = 0, batchNotified = true, curStatus = '';
+const enc = new TextEncoder(), dec = new TextDecoder('utf-8');
+
+// ---- UI helpers ----
+function log(msg, cls = '') {
+  const L = $('log'), d = document.createElement('div');
+  if (cls) d.className = cls;
+  d.textContent = new Date().toLocaleTimeString() + '  ' + msg;
+  L.appendChild(d);
+  while (L.childNodes.length > MAX_LOG) L.removeChild(L.firstChild);
+  L.scrollTop = L.scrollHeight;
+}
+function setStatus(text, kind) { curStatus = text; $('status').textContent = text; $('dot').className = 'dot ' + (kind || ''); }
+function showErr(title, body) { $('err').style.display = 'block'; $('errTitle').textContent = title; $('errBody').textContent = body; log(title + ' — ' + body, 'e'); }
+function hideErr() { $('err').style.display = 'none'; }
+function fmt(n) {
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(i ? 2 : 0) + ' ' + u[i];
+}
+function fmtDur(s) {
+  s = Math.round(s);
+  if (!isFinite(s) || s < 0) return '—';
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return h ? `${h}g ${m}p` : m ? `${m}p ${x}s` : `${x}s`;
+}
+const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (_) { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
+
+// ---- IndexedDB: nhớ handle file/thư mục qua các lần mở trang ----
+const idb = () => new Promise((res, rej) => {
+  const r = indexedDB.open('dbi-webusb', 1);
+  r.onupgradeneeded = () => { r.result.createObjectStore('files'); r.result.createObjectStore('dirs'); };
+  r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+});
+async function idbAll(store) {
+  try {
+    const db = await idb();
+    return await new Promise(res => { const q = db.transaction(store).objectStore(store).getAll(); q.onsuccess = () => res(q.result); q.onerror = () => res([]); });
+  } catch (_) { return []; }
+}
+async function idbSave(store, pairs) {
+  try {
+    const db = await idb();
+    await new Promise(res => {
+      const tx = db.transaction(store, 'readwrite'), s = tx.objectStore(store);
+      s.clear(); pairs.forEach(([k, v]) => s.put(v, k));
+      tx.oncomplete = tx.onerror = tx.onabort = () => res();
+    });
+  } catch (_) {}
+}
+let persistT = 0;
+function persist() {
+  clearTimeout(persistT);
+  persistT = setTimeout(() => {
+    idbSave('files', [...files].filter(([, e]) => e.handle).map(([k, e]) => [k, e.handle]));
+    idbSave('dirs', [...dirHandles]);
+  }, 300);
+}
+
+// ---- Thông tin game suy ra từ tên file (không giải mã, không cần khoá) ----
+function parseName(name) {
+  const ext = (name.match(EXT) || [''])[0].slice(1).toUpperCase();
+  const base = name.replace(EXT, '');
+  const tid = ((base.match(/\[([0-9A-Fa-f]{16})\]/) || [])[1] || '').toUpperCase();
+  const ver = (base.match(/\[v(\d+)\]/i) || [])[1];
+  const title = base.replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\((?:https?:\/\/)?(?:www\.)?[\w-]+(?:\.[\w-]+)*\.(?:com|net|org|io|vn|me|cc|tv|xyz|info|to|co)\)/gi, ' ')   // tag website dạng (site.com)
+    .replace(/\s+/g, ' ').trim() || base;
+  const tags = [];
+  if (tid) {
+    const s = tid.slice(-3);
+    if (s === '000') tags.push({text: 'Base', cls: 'base'});
+    else if (s === '800') tags.push({text: 'Update', cls: 'upd'});
+    else tags.push({text: 'DLC', cls: 'dlc'});
+  } else if (ext === 'XCI' || ext === 'XCZ') tags.push({text: 'Game card', cls: 'base'});
+  if (ver !== undefined) tags.push({text: 'v' + ver});
+  if (ext) tags.push({text: ext});
+  if (tid) tags.push({text: tid, cls: 'mono'});
+  return {title, tags};
+}
+
+// ---- Danh sách file ----
+function addFiles(items) {            // items: [{file, handle?}]
+  for (const {file: f, handle} of items) {
+    if (!EXT.test(f.name)) { log('Bỏ qua (sai định dạng): ' + f.name, 'w'); continue; }
+    const old = files.get(f.name);
+    if (old) {
+      if (old.file.size === f.size && old.file.lastModified === f.lastModified) { if (handle && !old.handle) old.handle = handle; continue; }
+      old.el.remove(); log('Trùng tên, thay thế: ' + f.name, 'w');
+    }
+    const el = document.createElement('div');
+    el.className = 'file';
+    el.innerHTML = '<div class="row"><span class="name sp"></span><button class="x">Xoá</button></div><div class="tags"></div><div class="meta"></div><div class="bar"><i></i></div>';
+    const info = parseName(f.name);
+    const nm = el.querySelector('.name');
+    nm.textContent = info.title; nm.title = f.name;
+    for (const t of info.tags) { const s = document.createElement('span'); s.className = 'tag ' + (t.cls || ''); s.textContent = t.text; el.querySelector('.tags').appendChild(s); }
+    el.querySelector('.x').onclick = () => { files.delete(f.name); el.remove(); updCount(); persist(); };
+    $('files').appendChild(el);
+    files.set(f.name, {file: f, handle: handle || null, sent: 0, el, t0: 0, tLast: 0, done: false, dur: 0});
+    updFile(f.name);
+  }
+  updCount(); persist();
+}
+async function walkDir(dir, depth, out) {
+  for await (const [, h] of dir.entries()) {
+    if (h.kind === 'file' && EXT.test(h.name)) out.push({file: await h.getFile(), handle: h});
+    else if (h.kind === 'directory' && depth < 2) await walkDir(h, depth + 1, out);
+  }
+}
+async function addHandles(hs) {
+  const items = [];
+  for (const h of hs) {
+    try {
+      if (h.kind === 'directory') { dirHandles.set(h.name, h); await walkDir(h, 0, items); }
+      else items.push({file: await h.getFile(), handle: h});
+    } catch (e) { log('Không đọc được ' + h.name + ': ' + e.message, 'e'); }
+  }
+  addFiles(items);
+}
+function updCount() {
+  const all = [...files.values()];
+  $('count').textContent = all.length + ' file · ' + fmt(all.reduce((a, e) => a + e.file.size, 0));
+}
+function updFile(name) {
+  const e = files.get(name); if (!e) return;
+  const p = e.file.size ? Math.min(100, e.sent / e.file.size * 100) : 0;
+  let m = fmt(e.file.size) + ' · ' + p.toFixed(1) + '%';
+  if (e.done) m = `✓ Hoàn tất · ${fmt(e.file.size)} · ${fmtDur(e.dur)} · TB ${(e.sent / Math.max(e.dur, 0.001) / 1048576).toFixed(1)} MB/s`;
+  else if (e.t0 && running && emaSpeed > 0) m += ` · ${(emaSpeed / 1048576).toFixed(1)} MB/s · còn ~${fmtDur((e.file.size - e.sent) / emaSpeed)}`;
+  e.el.classList.toggle('done', e.done);
+  e.el.querySelector('.meta').textContent = m;
+  e.el.querySelector('.bar>i').style.width = (e.done ? 100 : p) + '%';
+}
+let lastUpd = 0;
+function updFileThrottled(name) { const n = performance.now(); if (n - lastUpd > 200) { lastUpd = n; updFile(name); } }
+
+// chọn file / thư mục / kéo thả
+const drop = $('drop');
+const hasFS = 'showOpenFilePicker' in window;
+async function pickFiles() {
+  if (!hasFS) return $('pick').click();
+  try {
+    const hs = await showOpenFilePicker({multiple: true, types: [{description: 'Switch', accept: {'application/octet-stream': ['.nsp', '.nsz', '.xci', '.xcz']}}]});
+    await addHandles(hs);
+  } catch (e) { if (e.name !== 'AbortError') log('Chọn file lỗi: ' + e.message, 'e'); }
+}
+drop.onclick = pickFiles;
+$('pick').onchange = e => { addFiles([...e.target.files].map(file => ({file}))); e.target.value = ''; };
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = async e => {
+  e.preventDefault(); drop.classList.remove('over');
+  const its = [...e.dataTransfer.items].filter(i => i.kind === 'file');
+  // phải lấy đồng bộ trong sự kiện drop
+  const jobs = its.map(i => ({h: i.getAsFileSystemHandle ? i.getAsFileSystemHandle() : Promise.resolve(null), f: i.getAsFile()}));
+  for (const j of jobs) {
+    let h = null; try { h = await j.h; } catch (_) {}
+    if (h) await addHandles([h]); else if (j.f) addFiles([{file: j.f}]);
+  }
+};
+if (!('showDirectoryPicker' in window)) $('btnDir').style.display = 'none';
+$('btnDir').onclick = async () => {
+  try { await addHandles([await showDirectoryPicker({mode: 'read'})]); }
+  catch (e) { if (e.name !== 'AbortError') log('Chọn thư mục lỗi: ' + e.message, 'e'); }
+};
+$('btnClear').onclick = () => { files.forEach(e => e.el.remove()); files.clear(); dirHandles.clear(); updCount(); persist(); };
+
+// khôi phục danh sách đã lưu (cần cấp lại quyền đọc bằng một cú bấm)
+let savedFiles = [], savedDirs = [];
+async function loadSaved() {
+  savedFiles = await idbAll('files'); savedDirs = await idbAll('dirs');
+  const n = savedFiles.length + savedDirs.length;
+  const b = $('btnRestore');
+  if (n && !files.size) { b.style.display = ''; b.textContent = `Khôi phục danh sách đã lưu (${savedFiles.length} file, ${savedDirs.length} thư mục)`; }
+  else b.style.display = 'none';
+}
+$('btnRestore').onclick = async () => {
+  const hs = [];
+  for (const h of [...savedDirs, ...savedFiles]) {
+    try { if (await h.queryPermission({mode: 'read'}) === 'granted' || await h.requestPermission({mode: 'read'}) === 'granted') hs.push(h); }
+    catch (e) { log('Không khôi phục được ' + h.name + ': ' + e.message, 'w'); }
+  }
+  await addHandles(hs);
+  $('btnRestore').style.display = 'none';
+  log(`Đã khôi phục ${files.size} file`, 'o');
+};
+
+// ---- Tốc độ / ETA / hoàn tất ----
+setInterval(() => {
+  const now = performance.now(), dt = (now - speedMark.t) / 1000;
+  if (dt >= 0.5) {
+    const d = totalSent - speedMark.b, sp = d / dt;
+    if (running && d > 0) emaSpeed = emaSpeed ? emaSpeed * 0.7 + sp * 0.3 : sp;
+    $('sSpeed').textContent = (running ? sp / 1048576 : 0).toFixed(1) + ' MB/s';
+    $('sTotal').textContent = fmt(totalSent);
+    speedMark = {t: now, b: totalSent};
+  }
+  // ETA tổng hàng đợi
+  const left = [...files.values()].filter(e => !e.done).reduce((a, e) => a + Math.max(0, e.file.size - e.sent), 0);
+  $('sEta').textContent = running && emaSpeed > 0 && left > 0 && now - lastCmd < IDLE_DONE_MS ? fmtDur(left / emaSpeed) : '—';
+  if (running) files.forEach((e, n) => { if (e.t0 && !e.done) updFile(n); });
+  checkIdleDone(now);
+}, 1000);
+
+function finishFile(e) {
+  e.done = true; e.dur = Math.max((e.tLast - e.t0) / 1000, 0.001);
+  updFile([...files].find(([, v]) => v === e)[0]);
+}
+function checkIdleDone(now) {
+  if (!running || !lastCmd || now - lastCmd < IDLE_DONE_MS) return;
+  let active = false;
+  files.forEach(e => { if (e.t0 && !e.done && e.sent >= e.file.size * 0.99) { finishFile(e); active = true; } });
+  const pending = [...files.values()].some(e => e.t0 && !e.done);
+  const finished = [...files.values()].some(e => e.done);
+  if (!pending && finished) {
+    $('sCur').textContent = 'Hoàn tất';
+    if (curStatus !== 'Hoàn tất — chờ lệnh mới') setStatus('Hoàn tất — chờ lệnh mới', 'on');
+    if (!batchNotified) { batchNotified = true; notifyDone(); }
+  }
+}
+function notifyDone() {
+  const done = [...files.values()].filter(e => e.done);
+  const bytes = done.reduce((a, e) => a + e.sent, 0);
+  log(`Hoàn tất ${done.length} file · ${fmt(bytes)}`, 'o');
+  document.title = '✓ DBI WebUSB';
+  try {
+    const a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(), g = a.createGain();
+    o.connect(g); g.connect(a.destination); o.frequency.value = 880; g.gain.value = 0.1; o.start(); o.stop(a.currentTime + 0.25);
+  } catch (_) {}
+  try { if (Notification.permission === 'granted') new Notification('DBI: hoàn tất', {body: `${done.length} file · ${fmt(bytes)}`}); } catch (_) {}
+}
+
+// ---- Chống ngủ máy ----
+let wake = null;
+async function wakeOn() { try { if ('wakeLock' in navigator && !wake) { wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); } } catch (_) {} }
+async function wakeOff() { try { if (wake) await wake.release(); } catch (_) {} wake = null; }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && running) wakeOn(); });
+
+// ---- USB ----
+class UsbGone extends Error {}
+function explain(e) {
+  const n = e && e.name, m = (e && e.message) || String(e);
+  if (e instanceof UsbGone || n === 'NotFoundError' && dev === null)
+    return ['Switch đã bị ngắt kết nối', 'Cáp bị rút hoặc Switch thoát khỏi chế độ DBI. Cắm lại, mở DBI và bấm "Kết nối".'];
+  if (n === 'NetworkError' || /claim|access denied|busy/i.test(m))
+    return ['Không chiếm được thiết bị USB', 'Có thể một ứng dụng khác đang giữ thiết bị (dbibackend Python, Tinfoil/Awoo, tab Chrome khác, Steam, trình quản lý Switch...). Đóng chúng, rút/cắm lại cáp rồi thử lại. Chi tiết: ' + m];
+  if (n === 'SecurityError') return ['Bị chặn quyền truy cập', 'Trình duyệt/hệ điều hành từ chối truy cập USB. ' + m];
+  if (n === 'NotFoundError') return ['Không có thiết bị được chọn', m];
+  if (n === 'InvalidStateError') return ['Kết nối USB không còn hợp lệ', m];
+  return ['Lỗi: ' + (n || 'Error'), m];
+}
+async function out(buf) {
+  const r = await dev.transferOut(epOut, buf);
+  if (r.status === 'stall') { await dev.clearHalt('out', epOut); throw new Error('Endpoint OUT bị stall'); }
+  if (r.status !== 'ok') throw new Error('transferOut: ' + r.status);
+}
+async function readExact(n) {
+  const len = Math.ceil(n / mps) * mps;      // WebUSB yêu cầu bội số packet size để tránh babble
+  const r = await dev.transferIn(epIn, len);
+  if (r.status === 'stall') { await dev.clearHalt('in', epIn); throw new Error('Endpoint IN bị stall'); }
+  if (r.status !== 'ok') throw new Error('transferIn: ' + r.status);
+  if (r.data.byteLength < n) throw new Error('Nhận thiếu dữ liệu (' + r.data.byteLength + '/' + n + ')');
+  return new DataView(r.data.buffer, r.data.byteOffset, r.data.byteLength);
+}
+function header(type, id, size) {
+  const b = new ArrayBuffer(16), v = new DataView(b);
+  new Uint8Array(b).set([0x44, 0x42, 0x49, 0x30]);   // 'DBI0'
+  v.setUint32(4, type, true); v.setUint32(8, id, true); v.setUint32(12, size, true);
+  return b;
+}
+
+async function openDevice(d) {
+  await d.open();
+  if (d.configuration === null) await d.selectConfiguration(1);
+  let found = null;
+  for (const i of d.configuration.interfaces)
+    for (const a of i.alternates) {
+      const inn = a.endpoints.find(e => e.type === 'bulk' && e.direction === 'in');
+      const o = a.endpoints.find(e => e.type === 'bulk' && e.direction === 'out');
+      if (inn && o && !found) found = {i, a, inn, o};
+    }
+  if (!found) throw new Error('Không tìm thấy cặp endpoint Bulk IN/OUT trên thiết bị.');
+  await d.claimInterface(found.i.interfaceNumber);
+  if (found.a.alternateSetting) await d.selectAlternateInterface(found.i.interfaceNumber, found.a.alternateSetting);
+  ifaceNum = found.i.interfaceNumber;
+  epIn = found.inn.endpointNumber; epOut = found.o.endpointNumber;
+  mps = found.inn.packetSize || 512;
+  log(`Interface ${ifaceNum}, Bulk IN ep ${epIn}, Bulk OUT ep ${epOut}, packet ${mps}`, 'o');
+}
+
+async function connect(auto = false) {
+  if (running || connecting) return;
+  connecting = true; hideErr();
+  try {
+    let d = (await navigator.usb.getDevices()).find(x => x.vendorId === VID && x.productId === PID);
+    if (!d) {
+      if (auto) { connecting = false; return; }          // requestDevice cần thao tác người dùng
+      d = await navigator.usb.requestDevice({filters: [{vendorId: VID, productId: PID}]});
+    }
+    dev = d;
+    setStatus('Đang mở thiết bị...', 'busy');
+    await openDevice(d);
+  } catch (e) {
+    connecting = false;
+    if (e.name === 'NotFoundError' && /No device selected/i.test(e.message)) { setStatus('Chưa kết nối'); return; }
+    const [t, b] = explain(e); showErr(t, b); setStatus('Lỗi kết nối', 'bad');
+    await cleanup(); return;
+  }
+  connecting = false;
+  running = true; const my = ++session;
+  lastCmd = performance.now(); batchNotified = true; emaSpeed = 0; document.title = 'DBI WebUSB';
+  $('btnConnect').disabled = true; $('btnStop').disabled = false;
+  setStatus('Đã kết nối — chờ lệnh từ Switch', 'on');
+  wakeOn();
+  try { await commandLoop(); }
+  catch (e) { if (my === session && running) { const [t, b] = explain(e); showErr(t, b); setStatus('Mất kết nối', 'bad'); } }
+  finally { if (my === session) await cleanup(); }
+}
+let connecting = false;
+
+async function cleanup() {
+  running = false; connecting = false;
+  try { if (dev && dev.opened) { await dev.releaseInterface(ifaceNum).catch(() => {}); await dev.close(); } } catch (_) {}
+  dev = null; wakeOff();
+  $('btnConnect').disabled = false; $('btnStop').disabled = true;
+  $('sCur').textContent = '—';
+  if ($('dot').className.indexOf('bad') < 0 && curStatus.indexOf('Hoàn tất') < 0) setStatus('Đã ngắt kết nối');
+}
+
+async function commandLoop() {
+  log('Vào vòng lặp lệnh');
+  while (running) {
+    const h = await readExact(16);
+    lastCmd = performance.now();
+    if (h.getUint32(0, false) !== 0x44424930) continue;       // 'DBI0'
+    const id = h.getUint32(8, true), size = h.getUint32(12, true);
+    if (id === CMD_EXIT) {
+      log('Switch yêu cầu thoát', 'o'); await out(header(T_RESPONSE, CMD_EXIT, 0));
+      files.forEach(e => { if (e.t0 && !e.done) finishFile(e); });
+      setStatus('Hoàn tất', 'on'); if (!batchNotified) { batchNotified = true; notifyDone(); }
+      running = false; return;
+    }
+    else if (id === CMD_LIST) await doList();
+    else if (id === CMD_FILE_RANGE) await doRange(size);
+    else log('Lệnh không rõ: ' + id, 'w');
+  }
+}
+
+async function doList() {
+  log('Gửi danh sách file');
+  const bytes = enc.encode([...files.keys()].join('\n') + (files.size ? '\n' : ''));
+  await out(header(T_RESPONSE, CMD_LIST, bytes.length));
+  if (bytes.length > 0) { await readExact(16); await out(bytes); }
+}
+
+let prefetch = null;
+const prof = {hs: 0, rd: 0, wr: 0, n: 0};                    // ms: bắt tay / đọc file / ghi USB
+let lastRangeLog = 0;
+function rangeLog(name, off, fsize) {
+  const now = performance.now();
+  if (now - lastRangeLog < 3000) return;
+  lastRangeLog = now;
+  const n = Math.max(prof.n, 1);
+  log(`${name} @${fmt(off)} / ${fmt(fsize)} · TB mỗi range: bắt tay ${(prof.hs / n).toFixed(1)}ms, đợi đọc file ${(prof.rd / n).toFixed(1)}ms, ghi USB ${(prof.wr / n).toFixed(1)}ms`);
+  prof.hs = prof.rd = prof.wr = prof.n = 0;
+}
+
+async function doRange(dataSize) {
+  await out(header(T_ACK, CMD_FILE_RANGE, dataSize));
+  const h = await readExact(dataSize);
+  const rangeSize = h.getUint32(0, true);
+  const offset = Number(h.getBigUint64(4, true));
+  const nameLen = h.getUint32(12, true);
+  const name = dec.decode(new Uint8Array(h.buffer, h.byteOffset + 16, nameLen));
+  const e = files.get(name);
+  if (!e) { throw new Error('Switch yêu cầu file không có trong danh sách: ' + name); }
+  const now0 = performance.now();
+  if (e.done && offset === 0) { e.sent = 0; e.t0 = 0; }       // cài lại từ đầu
+  if (!e.t0) e.t0 = now0;
+  e.done = false; batchNotified = false; document.title = 'DBI WebUSB';
+  if (curStatus !== 'Đang truyền') setStatus('Đang truyền', 'busy');
+  const shown = parseName(name).title;
+  $('sCur').textContent = shown.length > 28 ? shown.slice(0, 25) + '…' : shown;
+  rangeLog(name, offset, e.file.size);
+
+  const f = e.file, end = offset + rangeSize;
+  const read = (o, n) => f.slice(o, o + n).arrayBuffer();     // streaming theo chunk, không nạp cả file
+  const take = o => {                                         // dùng dữ liệu đã đọc trước nếu khớp
+    const n = Math.min(CHUNK, end - o);
+    if (prefetch && prefetch.name === name && prefetch.off === o && prefetch.len === n) { const p = prefetch.p; prefetch = null; return p; }
+    return read(o, n);
+  };
+  let cur = offset;
+  let next = cur < end ? take(cur) : null;                    // bắt đầu đọc đĩa ngay, chồng lên thời gian bắt tay USB
+
+  let t = performance.now();
+  await out(header(T_RESPONSE, CMD_FILE_RANGE, rangeSize));
+  await readExact(16);                                        // ACK từ Switch
+  prof.hs += performance.now() - t;
+
+  while (next) {
+    let buf;
+    t = performance.now();
+    try { buf = await next; } catch (err) { throw new Error('Không đọc được file "' + name + '" (đã bị di chuyển/xoá?): ' + err.message); }
+    prof.rd += performance.now() - t;
+    cur += buf.byteLength;
+    if (cur < end) next = take(cur);
+    else {
+      next = null;
+      // Switch thường yêu cầu range liền kề: đọc trước range kế tiếp trong lúc đang gửi range này
+      const nl = Math.min(CHUNK, rangeSize, f.size - end);
+      if (nl > 0) prefetch = {name, off: end, len: nl, p: read(end, nl)};
+    }
+    t = performance.now();
+    await out(buf);
+    prof.wr += performance.now() - t;
+    totalSent += buf.byteLength;
+    e.sent = Math.min(f.size, e.sent + buf.byteLength);       // cộng dồn byte đã gửi (DBI đọc không tuần tự)
+    e.tLast = performance.now();
+    updFileThrottled(name);
+  }
+  prof.n++;
+  lastCmd = performance.now();
+}
+
+// ---- Sự kiện ----
+$('btnConnect').onclick = () => {
+  try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch (_) {}
+  connect(false);
+};
+$('btnStop').onclick = async () => { log('Người dùng dừng', 'w'); session++; setStatus('Đã dừng'); await cleanup(); };
+$('chkAuto').checked = lsGet('autoReconnect', '1') === '1';
+$('chkAuto').onchange = e => lsSet('autoReconnect', e.target.checked ? '1' : '0');
+
+if (!('usb' in navigator)) { $('banner').style.display = 'block'; $('btnConnect').disabled = true; }
+else {
+  navigator.usb.addEventListener('disconnect', ev => {
+    if (dev && ev.device === dev) {
+      showErr('Switch đã bị ngắt kết nối', 'Thiết bị USB biến mất giữa chừng (rút cáp hoặc Switch thoát DBI).');
+      setStatus('Mất kết nối', 'bad'); session++; running = false; dev = null; wakeOff();
+      $('btnConnect').disabled = false; $('btnStop').disabled = true;
+    }
+  });
+  navigator.usb.addEventListener('connect', ev => {
+    if (ev.device.vendorId === VID && ev.device.productId === PID) {
+      if ($('chkAuto').checked) { log('Phát hiện Switch — tự kết nối lại', 'o'); setTimeout(() => connect(true), 600); }
+      else log('Phát hiện Switch — bấm "Kết nối" để tiếp tục', 'o');
+    }
+  });
+  if ($('chkAuto').checked) setTimeout(() => connect(true), 300);      // Switch đã cắm sẵn và đã cấp quyền từ trước
+}
+loadSaved();
+log('Sẵn sàng. Thêm file hoặc thư mục, bấm "Kết nối Switch", chọn thiết bị "Nintendo Switch".');
+</script>
+</body>
+</html>
