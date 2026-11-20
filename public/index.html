@@ -81,8 +81,9 @@
       <button id="btnStop" disabled>Ngắt / Dừng</button>
       <label class="chk"><input type="checkbox" id="chkAuto" checked> Tự kết nối lại</label>
       <span class="sp"></span>
-      <span class="meta">Trên Switch: mở DBI → "Run MTP/USB" (chế độ cài từ USB).</span>
+      <span class="meta">Trên Switch: mở DBI và vào chế độ cài đặt qua USB.</span>
     </div>
+    <div class="meta" id="staleNote" hidden style="color:var(--warn);margin-top:8px"></div>
   </div>
 
   <div class="card">
@@ -250,12 +251,21 @@ function addFiles(items) {            // items: [{file, handle?}]
     const nm = el.querySelector('.name');
     nm.textContent = info.title; nm.title = f.name;
     for (const t of info.tags) { const s = document.createElement('span'); s.className = 'tag ' + (t.cls || ''); s.textContent = t.text; el.querySelector('.tags').appendChild(s); }
-    el.querySelector('.x').onclick = () => { files.delete(f.name); el.remove(); updCount(); persist(); };
+    el.querySelector('.x').onclick = () => { files.delete(f.name); el.remove(); updCount(); persist(); checkStale(); };
     $('files').appendChild(el);
     files.set(f.name, {file: f, handle: handle || null, sent: 0, el, t0: 0, tLast: 0, done: false, dur: 0});
     updFile(f.name);
   }
-  updCount(); persist();
+  updCount(); persist(); checkStale();
+}
+// Cảnh báo khi danh sách đổi sau khi đã gửi cho Switch (Switch giữ danh sách cũ cho tới khi nạp lại)
+let sentNames = null;
+function checkStale() {
+  const el = $('staleNote'); if (!el) return;
+  const cur = [...files.keys()];
+  const stale = running && sentNames && (cur.length !== sentNames.size || cur.some(n => !sentNames.has(n)));
+  el.hidden = !stale;
+  if (stale) el.textContent = 'Danh sách file đã thay đổi sau khi gửi cho Switch. Trên DBI, hãy thoát màn hình cài qua USB rồi vào lại để Switch nạp danh sách mới.';
 }
 async function walkDir(dir, depth, out) {
   for await (const [, h] of dir.entries()) {
@@ -319,7 +329,7 @@ $('btnDir').onclick = async () => {
   try { await addHandles([await showDirectoryPicker({mode: 'read'})]); }
   catch (e) { if (e.name !== 'AbortError') log('Chọn thư mục lỗi: ' + e.message, 'e'); }
 };
-$('btnClear').onclick = () => { files.forEach(e => e.el.remove()); files.clear(); dirHandles.clear(); updCount(); persist(); };
+$('btnClear').onclick = () => { files.forEach(e => e.el.remove()); files.clear(); dirHandles.clear(); updCount(); persist(); checkStale(); };
 
 // khôi phục danh sách đã lưu (cần cấp lại quyền đọc bằng một cú bấm)
 let savedFiles = [], savedDirs = [];
@@ -396,6 +406,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 class UsbGone extends Error {}
 function explain(e) {
   const n = e && e.name, m = (e && e.message) || String(e);
+  if (e && e.title) return [e.title, m];
   if (e instanceof UsbGone || n === 'NotFoundError' && dev === null)
     return ['Switch đã bị ngắt kết nối', 'Cáp bị rút hoặc Switch thoát khỏi chế độ DBI. Cắm lại, mở DBI và bấm "Kết nối".'];
   if (n === 'NetworkError' || /claim|access denied|busy/i.test(m))
@@ -477,7 +488,7 @@ let connecting = false;
 async function cleanup() {
   running = false; connecting = false;
   try { if (dev && dev.opened) { await dev.releaseInterface(ifaceNum).catch(() => {}); await dev.close(); } } catch (_) {}
-  dev = null; wakeOff();
+  dev = null; wakeOff(); sentNames = null; checkStale();
   $('btnConnect').disabled = false; $('btnStop').disabled = true;
   $('sCur').textContent = '—';
   if ($('dot').className.indexOf('bad') < 0 && curStatus.indexOf('Hoàn tất') < 0) setStatus('Đã ngắt kết nối');
@@ -503,7 +514,9 @@ async function commandLoop() {
 }
 
 async function doList() {
-  log('Gửi danh sách file');
+  const names = [...files.keys()];
+  log(`Gửi danh sách ${names.length} file: ` + (names.slice(0, 5).map(n => parseName(n).title).join(', ') || '(trống)') + (names.length > 5 ? ', ...' : ''));
+  sentNames = new Set(names); checkStale();
   const bytes = enc.encode([...files.keys()].join('\n') + (files.size ? '\n' : ''));
   await out(header(T_RESPONSE, CMD_LIST, bytes.length));
   if (bytes.length > 0) { await readExact(16); await out(bytes); }
@@ -529,7 +542,12 @@ async function doRange(dataSize) {
   const nameLen = h.getUint32(12, true);
   const name = dec.decode(new Uint8Array(h.buffer, h.byteOffset + 16, nameLen));
   const e = files.get(name);
-  if (!e) { throw new Error('Switch yêu cầu file không có trong danh sách: ' + name); }
+  if (!e) {
+    const er = new Error(`Switch xin file "${name}" nhưng file này không có trong danh sách hiện tại (${files.size} file). ` +
+      'Thường do danh sách trên Switch đã cũ: bạn đã thêm/xoá file sau khi Switch nhận danh sách. ' +
+      'Hãy thoát màn hình cài qua USB trên DBI rồi vào lại để Switch nạp danh sách mới, sau đó chọn lại file.');
+    er.title = 'Switch xin file không có trong danh sách'; throw er;
+  }
   const now0 = performance.now();
   if (e.done && offset === 0) { e.sent = 0; e.t0 = 0; }       // cài lại từ đầu
   if (!e.t0) e.t0 = now0;
