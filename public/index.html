@@ -42,16 +42,39 @@
   #log .e{color:#ff7b7b} #log .w{color:#f5c26b} #log .o{color:#6fdc8c}
   #banner{display:none;border-color:var(--err);color:var(--err)}
   #err{display:none;border-color:var(--err)} #err b{color:var(--err)}
+  [hidden]{display:none!important}
+  .tabbody{display:grid;gap:16px}
+  .tabs{display:flex;gap:6px;border-bottom:1px solid var(--line)}
+  .tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--mut);padding:8px 14px}
+  .tabs button.on{color:var(--tx);border-bottom-color:var(--acc)}
+  select{font:inherit;color:var(--tx);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 10px;max-width:100%}
+  #errBody{white-space:pre-wrap}
+  .acts{display:flex;gap:4px;justify-content:flex-end}
+  .frow button.danger{color:var(--err);border-color:var(--err)}
+  #mBrowser.dropping{outline:2px dashed var(--acc);outline-offset:-4px}
+  .frow{display:grid;grid-template-columns:24px 1fr 90px 130px auto;gap:8px;align-items:center;padding:7px 4px;border-top:1px solid var(--line)}
+  .frow:first-child{border-top:0}
+  .frow.dir{cursor:pointer} .frow.dir:hover{background:rgba(128,128,128,.08)}
+  .fname{word-break:break-all} .fsize,.fdate{color:var(--mut);font-size:12px;text-align:right}
+  .frow button{padding:2px 8px;font-size:12px}
+  @media (max-width:640px){.frow{grid-template-columns:24px 1fr 70px}.fdate{display:none}.acts{grid-column:2/4;justify-content:flex-start}}
+  #mPath{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--mut);word-break:break-all}
 </style>
 </head>
 <body>
 <main>
   <div class="row"><h1><span>DBI</span> WebUSB Backend</h1><span class="sp"></span>
-    <span class="dot" id="dot"></span><span id="status">Chưa kết nối</span></div>
+    <span id="hdrStat" class="row" style="gap:6px"><span class="dot" id="dot"></span><span id="status">Chưa kết nối</span></span></div>
+
+  <div class="tabs">
+    <button class="on" data-tab="tabInstall">Cài đặt (DBI backend)</button>
+    <button data-tab="tabMtp">File trên Switch (MTP)</button>
+  </div>
 
   <div class="card" id="banner"><b>Trình duyệt hoặc thiết bị này không hỗ trợ WebUSB.</b> Hãy mở trang này bằng Google Chrome hoặc Microsoft Edge (bản mới) trên máy tính macOS, Windows, Linux hoặc ChromeOS. Safari, Firefox và các trình duyệt trên iPhone/iPad không hỗ trợ.</div>
   <div class="card" id="err"><b id="errTitle"></b><div id="errBody" style="margin-top:4px"></div></div>
 
+  <div id="tabInstall" class="tabbody">
   <div class="card">
     <div class="row">
       <button class="pri" id="btnConnect">Kết nối Switch</button>
@@ -79,6 +102,34 @@
     <div class="stat"><b id="sEta">—</b><span>Còn lại (cả hàng đợi)</span></div>
     <div class="stat"><b id="sTotal">0 B</b><span>Đã gửi (phiên này)</span></div>
     <div class="stat"><b id="sCur">—</b><span>Đang gửi</span></div>
+  </div>
+
+  </div><!-- /tabInstall -->
+
+  <div id="tabMtp" class="tabbody" hidden>
+    <div class="card">
+      <div class="row">
+        <button class="pri" id="mConnect">Kết nối MTP</button>
+        <button id="mDisc" disabled>Ngắt kết nối</button>
+        <span class="sp"></span><span class="meta" id="mStat">Chưa kết nối</span>
+      </div>
+      <div class="meta" style="margin-top:8px">Trên Switch: mở DBI và bật chế độ MTP. Chế độ này khác chế độ cài đặt qua USB, hai chế độ không dùng cùng lúc. Duyệt và tải file về máy ở mọi kho. Riêng kho "SD Card" còn cho tạo thư mục, đổi tên, xoá và tải lên file/thư mục (mỗi file nhỏ hơn 4 GiB; kéo thả vào danh sách cũng được).</div>
+    </div>
+    <div class="card" id="mBrowser" hidden>
+      <div class="row">
+        <select id="mStore"></select><span class="sp"></span>
+        <button id="mMkdir" disabled>Thư mục mới</button><button id="mUpload" disabled>Tải lên file</button><button id="mUploadDir" disabled>Tải lên thư mục</button>
+        <button id="mUp" disabled>⬆ Lên một cấp</button><button id="mRefresh">Làm mới</button>
+      </div>
+      <div id="mPath" style="margin:10px 0 2px"></div>
+      <div class="meta" id="mHint" style="margin-bottom:8px"></div>
+      <div id="mList"></div>
+    </div>
+    <div class="card" id="mDl" hidden>
+      <div class="row"><span class="name sp" id="mDlName"></span><button id="mDlCancel">Huỷ</button></div>
+      <div class="meta" id="mDlMeta"></div>
+      <div class="bar"><i id="mDlBar"></i></div>
+    </div>
   </div>
 
   <div class="card"><div id="log"></div></div>
@@ -527,6 +578,532 @@ async function doRange(dataSize) {
   prof.n++;
   lastCmd = performance.now();
 }
+
+// ================= MTP: duyệt và tải file từ Switch (chế độ MTP của DBI) =================
+const MTP_VID = 0x057e, MTP_PID = 0x201d, MCHUNK = 4 * 1024 * 1024;
+const OP = {CloseSession: 0x1003, OpenSession: 0x1002, GetDeviceInfo: 0x1001, GetStorageIDs: 0x1004, GetStorageInfo: 0x1005,
+  GetObjectHandles: 0x1007, GetObjectInfo: 0x1008, DeleteObject: 0x100B, SendObjectInfo: 0x100C, SendObject: 0x100D,
+  GetPartialObject64: 0x95C1, GetObjectPropValue: 0x9803, SetObjectPropValue: 0x9804};
+const hex = (n, w = 4) => '0x' + n.toString(16).padStart(w, '0');
+const mtp = {dev: null, iface: -1, inEp: 0, outEp: 0, mps: 512, rest: new Uint8Array(0), tid: 1, lock: Promise.resolve(),
+  ops: [], stores: [], sid: 0, stack: [], items: [], dl: null, nav: 0};
+
+// ==MTP-CORE-BEGIN==
+function mConcat(parts, total) { const r = new Uint8Array(total); let o = 0; for (const p of parts) { r.set(p, o); o += p.length; } return r; }
+function prd(u8) {                                          // đọc kiểu PTP (little-endian)
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength); let o = 0;
+  return {
+    u16: () => { const v = dv.getUint16(o, true); o += 2; return v; },
+    u32: () => { const v = dv.getUint32(o, true); o += 4; return v; },
+    u64: () => { const v = dv.getBigUint64(o, true); o += 8; return v; },
+    str: () => { const n = dv.getUint8(o++); let s = ''; for (let i = 0; i < n; i++) { const ch = dv.getUint16(o, true); o += 2; if (ch) s += String.fromCharCode(ch); } return s; },
+    arr16: () => { const n = dv.getUint32(o, true); o += 4; const a = []; for (let i = 0; i < n; i++) { a.push(dv.getUint16(o, true)); o += 2; } return a; },
+    arr32: () => { const n = dv.getUint32(o, true); o += 4; const a = []; for (let i = 0; i < n; i++) { a.push(dv.getUint32(o, true)); o += 4; } return a; },
+  };
+}
+async function mReadChunk() {
+  const r = await mtp.dev.transferIn(mtp.inEp, 1048576);
+  if (r.status === 'stall') { await mtp.dev.clearHalt('in', mtp.inEp); throw new Error('Endpoint IN bị stall'); }
+  if (r.status !== 'ok') throw new Error('transferIn: ' + r.status);
+  return new Uint8Array(r.data.buffer, r.data.byteOffset, r.data.byteLength);
+}
+async function mReadContainer() {
+  let first = mtp.rest; mtp.rest = new Uint8Array(0);
+  while (first.length < 12) { const c = await mReadChunk(); first = first.length ? mConcat([first, c], first.length + c.length) : c; }
+  const len = new DataView(first.buffer, first.byteOffset, 12).getUint32(0, true);
+  const parts = [first]; let got = first.length;
+  while (got < len) { const c = await mReadChunk(); parts.push(c); got += c.length; }   // gom một lần, không nối dần (tránh O(n²))
+  const all = parts.length === 1 ? first : mConcat(parts, got);
+  mtp.rest = all.subarray(len);
+  const dv = new DataView(all.buffer, all.byteOffset, 12);
+  return {type: dv.getUint16(4, true), code: dv.getUint16(6, true), payload: all.subarray(12, len)};
+}
+function mCmdContainer(code, params, tid) {
+  if (!Number.isInteger(code)) throw new Error('Mã lệnh MTP không hợp lệ (lỗi lập trình): ' + code);
+  const len = 12 + params.length * 4, b = new ArrayBuffer(len), dv = new DataView(b);
+  dv.setUint32(0, len, true); dv.setUint16(4, 1, true); dv.setUint16(6, code, true); dv.setUint32(8, tid, true);
+  params.forEach((p, i) => dv.setUint32(12 + i * 4, p >>> 0, true));
+  return b;
+}
+async function mOut(buf) {
+  const r = await mtp.dev.transferOut(mtp.outEp, buf);
+  if (r.status === 'stall') { await mtp.dev.clearHalt('out', mtp.outEp); throw new Error('Endpoint OUT bị stall'); }
+  if (r.status !== 'ok') throw new Error('transferOut: ' + r.status);
+}
+async function mAwait(code, okCodes) {                      // đọc tới khi có gói Response
+  let data = null;
+  for (;;) {
+    const c = await mReadContainer();
+    if (c.type === 2) data = c.payload;
+    else if (c.type === 3) {
+      if (!okCodes.includes(c.code)) { const er = new Error('Switch trả lỗi MTP ' + hex(c.code) + ' cho lệnh ' + hex(code)); er.mtpCode = c.code; throw er; }
+      const params = [];
+      for (let i = 0; i + 4 <= c.payload.length; i += 4) params.push(new DataView(c.payload.buffer, c.payload.byteOffset + i, 4).getUint32(0, true));
+      return {data, code: c.code, params};
+    }
+  }
+}
+async function mTxnRaw(code, params, okCodes) {
+  try { await mOut(mCmdContainer(code, params, mtp.tid++)); return await mAwait(code, okCodes); }
+  catch (e) { mtp.rest = new Uint8Array(0); throw e; }
+}
+// Gửi lệnh kèm dữ liệu (SendObjectInfo / SendObject / SetObjectPropValue). nextChunk(want) phải trả đúng `want` byte.
+async function mSendRaw(code, params, total, nextChunk, okCodes, onProg) {
+  try {
+    const tid = mtp.tid++;
+    await mOut(mCmdContainer(code, params, tid));
+    const hdr = new DataView(new ArrayBuffer(12));
+    hdr.setUint32(0, 12 + total, true); hdr.setUint16(4, 2, true); hdr.setUint16(6, code, true); hdr.setUint32(8, tid, true);
+    let sent = 0, wire = 0;
+    for (;;) {
+      const want = Math.min(wire === 0 ? MCHUNK - 12 : MCHUNK, total - sent);   // lần đầu trừ 12 byte header để mọi lần gửi đều là bội số packet
+      const piece = want > 0 ? await nextChunk(want) : new Uint8Array(0);
+      if (piece.length !== want) throw new Error('Nguồn dữ liệu trả sai số byte (' + piece.length + '/' + want + ')');
+      let buf = piece;
+      if (wire === 0) { buf = new Uint8Array(12 + piece.length); buf.set(new Uint8Array(hdr.buffer)); buf.set(piece, 12); }
+      await mOut(buf);
+      wire += buf.length; sent += piece.length;
+      if (onProg) onProg(sent);
+      if (sent >= total) break;
+    }
+    if (wire % mtp.mps === 0) await mOut(new Uint8Array(0));     // gói rỗng kết thúc khi tổng là bội số của packet size
+    return await mAwait(code, okCodes);
+  } catch (e) { mtp.rest = new Uint8Array(0); throw e; }
+}
+function mTxn(code, params = [], okCodes = [0x2001]) {      // tuần tự hoá mọi giao dịch qua một hàng đợi
+  const p = mtp.lock.then(() => mTxnRaw(code, params, okCodes));
+  mtp.lock = p.catch(() => {});
+  return p;
+}
+function mSend(code, params, total, nextChunk, okCodes = [0x2001], onProg) {
+  const p = mtp.lock.then(() => mSendRaw(code, params, total, nextChunk, okCodes, onProg));
+  mtp.lock = p.catch(() => {});
+  return p;
+}
+function ptpStr(s) {                                        // chuỗi PTP: số ký tự (gồm NUL) + UTF-16LE; chuỗi rỗng = 1 byte 0
+  if (!s) return new Uint8Array([0]);
+  const b = new Uint8Array(1 + (s.length + 1) * 2); b[0] = s.length + 1;
+  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); b[1 + i * 2] = c & 255; b[2 + i * 2] = c >> 8; }
+  return b;
+}
+function buildObjectInfo({sid, fmt, size, parent, name}) {
+  const head = new DataView(new ArrayBuffer(52));
+  head.setUint32(0, sid, true); head.setUint16(4, fmt, true); head.setUint16(6, 0, true); head.setUint32(8, size, true);
+  head.setUint32(34 + 4, parent, true);                               // offset 38: ParentObject (thumb/ảnh = 0)
+  head.setUint16(42, fmt === 0x3001 ? 1 : 0, true);                   // AssociationType: thư mục chung
+  const parts = [new Uint8Array(head.buffer, 0, 52), ptpStr(name), ptpStr(''), ptpStr(''), ptpStr('')];
+  return mConcat(parts, parts.reduce((a, p) => a + p.length, 0));
+}
+function bufProvider(u8) { let o = 0; return async want => { const s = u8.subarray(o, o + want); o += want; return s; }; }
+function parseObjectInfo(u8) {
+  const q = prd(u8);
+  const sid = q.u32(), fmt = q.u16(); q.u16(); const size = q.u32();
+  q.u16(); q.u32(); q.u32(); q.u32(); q.u32(); q.u32(); q.u32();    // thumb fmt/size/w/h, image w/h/depth
+  const parent = q.u32(); q.u16(); q.u32(); q.u32();                 // parent, assoc type/desc, sequence
+  const name = q.str(); q.str(); const mod = q.str();                // filename, capture date, modification date
+  return {sid, fmt, size, parent, name, mod};
+}
+// ==MTP-CORE-END==
+
+function mFmtDate(s) {
+  const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/.exec(s || '');
+  return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : '';
+}
+const M_ERR = {0x2002: 'Lỗi chung từ Switch', 0x2005: 'Switch không hỗ trợ thao tác này', 0x2008: 'Kho lưu trữ không hợp lệ', 0x2009: 'Mục không còn tồn tại (đã bị đổi/xoá?)',
+  0x200C: 'Kho đã đầy', 0x200D: 'Mục đang được bảo vệ ghi', 0x200E: 'Kho chỉ đọc', 0x2012: 'Thư mục cha không hợp lệ', 0x201A: 'Thư mục cha không hợp lệ', 0x2019: 'Switch đang bận, thử lại sau'};
+function mExplain(e) {
+  const n = e && e.name, m = (e && e.message) || String(e);
+  if (e && e.mtpCode !== undefined) return ['Switch từ chối thao tác', (M_ERR[e.mtpCode] || 'Mã lỗi MTP ' + hex(e.mtpCode)) + '. ' + m];
+  if (/disconnected|no longer|not found/i.test(m) || n === 'NotFoundError') return ['Switch đã bị ngắt kết nối', 'Cáp bị rút hoặc DBI thoát chế độ MTP. Cắm lại, bật MTP trong DBI rồi kết nối lại.'];
+  if (n === 'NetworkError' || /claim|access denied|busy/i.test(m)) return ['Không chiếm được thiết bị MTP', 'Có thể ứng dụng khác đang giữ thiết bị (Android File Transfer, tiến trình ptpcamerad, tab Chrome khác...). Đóng chúng, rút/cắm lại cáp rồi thử lại. Chi tiết: ' + m];
+  if (n === 'SecurityError') return ['Bị chặn quyền truy cập', m];
+  return ['Lỗi MTP', m];
+}
+const mSet = (id, text) => { $(id).textContent = text; };
+
+async function mConnect() {
+  if (mtp.dev) return;
+  hideErr();
+  let d = null;
+  try {
+    d = (await navigator.usb.getDevices()).find(x => x.vendorId === MTP_VID && x.productId === MTP_PID);
+    if (!d) d = await navigator.usb.requestDevice({filters: [{vendorId: MTP_VID, productId: MTP_PID}]});
+    mSet('mStat', 'Đang mở thiết bị...');
+    await d.open();
+    if (d.configuration === null) await d.selectConfiguration(1);
+    let pick = null;
+    for (const i of d.configuration.interfaces) for (const a of i.alternates) {
+      const bi = a.endpoints.find(e => e.type === 'bulk' && e.direction === 'in'), bo = a.endpoints.find(e => e.type === 'bulk' && e.direction === 'out');
+      if (bi && bo && (!pick || a.interfaceClass === 6)) pick = {i, bi, bo};
+    }
+    if (!pick) throw new Error('Không tìm thấy interface MTP (Bulk IN/OUT).');
+    await d.claimInterface(pick.i.interfaceNumber);
+    Object.assign(mtp, {dev: d, iface: pick.i.interfaceNumber, inEp: pick.bi.endpointNumber, outEp: pick.bo.endpointNumber, mps: pick.bi.packetSize || 512,
+      rest: new Uint8Array(0), tid: 1, lock: Promise.resolve(), stores: [], stack: [], sid: 0});
+    await mTxn(OP.OpenSession, [1], [0x2001, 0x201E]);
+    const info = prd((await mTxn(OP.GetDeviceInfo)).data);
+    info.u16(); info.u32(); info.u16(); info.str(); info.u16();
+    mtp.ops = info.arr16(); info.arr16(); info.arr16(); info.arr16(); info.arr16();
+    const man = info.str(), model = info.str();
+    const ids = prd((await mTxn(OP.GetStorageIDs)).data).arr32();
+    for (const id of ids) {
+      const q = prd((await mTxn(OP.GetStorageInfo, [id])).data);
+      q.u16(); q.u16(); const acc = q.u16(), cap = Number(q.u64()), free = Number(q.u64()); q.u32();
+      mtp.stores.push({id, acc, cap, free, name: q.str() || hex(id, 8)});
+    }
+    log(`MTP: ${man} ${model}, ${mtp.stores.length} kho, partial64=${mtp.ops.includes(OP.GetPartialObject64)}`, 'o');
+    $('mConnect').disabled = true; $('mDisc').disabled = false; $('mBrowser').hidden = false;
+    mSet('mStat', `Đã kết nối — ${man} ${model}`);
+    const sel = $('mStore'); sel.innerHTML = '';
+    for (const s of mtp.stores) {
+      const o = document.createElement('option'); o.value = s.id;
+      o.textContent = mStoreLabel(s);
+      sel.appendChild(o);
+    }
+    mtp.sid = mtp.stores.length ? mtp.stores[0].id : 0;
+    mUpdateToolbar();
+    await mOpenDir();
+  } catch (e) {
+    if (e.name === 'NotFoundError' && /No device selected/i.test(e.message)) { mSet('mStat', 'Chưa kết nối'); return; }
+    const [t, b] = mExplain(e); showErr(t, b); await mCleanup();
+  }
+}
+async function mCleanup() {
+  mtp.nav++;
+  if (mtp.dl) mtp.dl.cancel = true;
+  const d = mtp.dev; mtp.dev = null;
+  try { if (d && d.opened) { await d.releaseInterface(mtp.iface).catch(() => {}); await d.close(); } } catch (_) {}
+  $('mConnect').disabled = false; $('mDisc').disabled = true; $('mBrowser').hidden = true; $('mList').innerHTML = '';
+  mSet('mStat', 'Chưa kết nối');
+}
+async function mDisconnect() {
+  try { if (mtp.dev && !mtp.dl) await mTxn(OP.CloseSession); } catch (_) {}
+  await mCleanup();
+}
+
+async function mOpenDir() {
+  const token = ++mtp.nav, parent = mtp.stack.length ? mtp.stack[mtp.stack.length - 1].h : 0xFFFFFFFF;
+  const store = mtp.stores.find(s => s.id === mtp.sid);
+  $('mPath').textContent = (store ? store.name : '') + ['', ...mtp.stack.map(x => x.name)].join('/') + '/';
+  $('mUp').disabled = !mtp.stack.length;
+  const list = $('mList'); list.innerHTML = '<div class="meta">Đang đọc thư mục...</div>';
+  try {
+    const hs = prd((await mTxn(OP.GetObjectHandles, [mtp.sid, 0, parent])).data).arr32();
+    const items = [];
+    for (let i = 0; i < hs.length; i++) {
+      if (token !== mtp.nav) return;                       // người dùng đã chuyển sang thư mục khác
+      const o = parseObjectInfo((await mTxn(OP.GetObjectInfo, [hs[i]])).data);
+      o.h = hs[i]; o.dir = o.fmt === 0x3001;
+      if (!o.dir && o.size === 0xFFFFFFFF) {               // file >= 4 GB: đọc kích thước 64-bit qua thuộc tính
+        try { o.size = Number(prd((await mTxn(OP.GetObjectPropValue, [hs[i], 0xDC04])).data).u64()); } catch (_) {}
+      }
+      items.push(o);
+      if (i % 25 === 24) list.firstChild && (list.firstChild.textContent = `Đang đọc thư mục... ${i + 1}/${hs.length}`);
+    }
+    if (token !== mtp.nav) return;
+    items.sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name, undefined, {numeric: true, sensitivity: 'base'}));
+    mtp.items = items;
+    mRender(items);
+  } catch (e) { if (token === mtp.nav) { const [t, b] = mExplain(e); showErr(t, b); list.innerHTML = ''; } }
+}
+function mRender(items) {
+  const list = $('mList'); list.innerHTML = '';
+  if (!items.length) { list.innerHTML = '<div class="meta">Thư mục trống.</div>'; return; }
+  for (const it of items) {
+    const r = document.createElement('div'); r.className = 'frow' + (it.dir ? ' dir' : '');
+    const ic = document.createElement('span'); ic.textContent = it.dir ? '📁' : '📄';
+    const nm = document.createElement('span'); nm.className = 'fname'; nm.textContent = it.name;
+    const sz = document.createElement('span'); sz.className = 'fsize'; sz.textContent = it.dir ? '' : fmt(it.size);
+    const dt = document.createElement('span'); dt.className = 'fdate'; dt.textContent = mFmtDate(it.mod);
+    const acts = document.createElement('span'); acts.className = 'acts';
+    const btn = (text, fn, cls) => { const b = document.createElement('button'); b.textContent = text; if (cls) b.className = cls; b.onclick = e => { e.stopPropagation(); fn(it); }; acts.appendChild(b); };
+    if (it.dir) r.onclick = () => { if (mtp.dl) return; mtp.stack.push({h: it.h, name: it.name}); mOpenDir(); };
+    else btn('Tải về', mDownload);
+    if (mCanWrite()) { btn('Đổi tên', mRename); btn('Xoá', mDelete, 'danger'); }
+    r.append(ic, nm, sz, dt, acts);
+    list.appendChild(r);
+  }
+}
+
+async function mDownload(it) {
+  if (mtp.dl) return;
+  if (!window.showSaveFilePicker) return showErr('Trình duyệt không hỗ trợ lưu file trực tiếp', 'Cần Chrome hoặc Edge bản mới (File System Access API).');
+  if (!mtp.ops.includes(OP.GetPartialObject64)) return showErr('Switch không hỗ trợ tải từng phần', 'Thiết bị không khai báo lệnh GetPartialObject64 nên không thể tải file lớn an toàn.');
+  let w;
+  try { w = await (await showSaveFilePicker({suggestedName: it.name})).createWritable(); }
+  catch (e) { if (e.name !== 'AbortError') showErr('Không tạo được file đích', e.message); return; }
+  const dl = mtp.dl = {cancel: false};
+  $('mDl').hidden = false; $('mDlName').textContent = it.name; mSet('mDlMeta', 'Bắt đầu...'); $('mDlBar').style.width = '0%';
+  $('mDlCancel').textContent = 'Huỷ'; $('mDlCancel').onclick = () => { dl.cancel = true; };
+  mtp.nav++; $('mUp').disabled = true; wakeOn();
+  const t0 = performance.now(); let off = 0, lastUi = 0;
+  log(`MTP tải: ${it.name} (${fmt(it.size)})`);
+  try {
+    while (off < it.size) {
+      if (dl.cancel) throw new Error('CANCEL');
+      const n = Math.min(MCHUNK, it.size - off);
+      const r = await mTxn(OP.GetPartialObject64, [it.h, off % 4294967296, Math.floor(off / 4294967296), n]);
+      if (!r.data || !r.data.length) throw new Error('Switch không trả dữ liệu tại offset ' + off);
+      await w.write(r.data);
+      off += r.data.length;
+      const now = performance.now();
+      if (now - lastUi > 250) {
+        lastUi = now;
+        const sp = off / ((now - t0) / 1000);
+        mSet('mDlMeta', `${fmt(off)} / ${fmt(it.size)} · ${(sp / 1048576).toFixed(1)} MB/s · còn ~${fmtDur((it.size - off) / sp)}`);
+        $('mDlBar').style.width = (off / it.size * 100) + '%';
+      }
+    }
+    await w.close();
+    const dur = (performance.now() - t0) / 1000;
+    log(`MTP tải xong: ${it.name} · ${fmt(it.size)} · ${fmtDur(dur)} · TB ${(it.size / Math.max(dur, 0.001) / 1048576).toFixed(1)} MB/s`, 'o');
+    mSet('mDlMeta', `✓ Hoàn tất · ${fmt(it.size)} · ${fmtDur(dur)}`); $('mDlBar').style.width = '100%';
+  } catch (e) {
+    try { await w.abort(); } catch (_) {}
+    if (e.message === 'CANCEL') { log('Đã huỷ tải: ' + it.name, 'w'); mSet('mDlMeta', 'Đã huỷ (file đích chưa hoàn chỉnh)'); }
+    else { const [t, b] = mExplain(e); showErr(t, b + ' (đã tải ' + fmt(off) + ' / ' + fmt(it.size) + ')'); mSet('mDlMeta', 'Lỗi'); }
+  } finally {
+    mtp.dl = null; wakeOff();
+    if (mtp.dev) { $('mUp').disabled = !mtp.stack.length; mOpenDir(); }
+  }
+}
+
+// ---- Giai đoạn 2a: ghi vào kho "SD Card" (tạo thư mục, đổi tên, xoá, tải lên < 4 GiB) ----
+const M_BADCHARS = /[\\/:*?"<>|\u0000-\u001f]/;
+const M_MAXFILE = 0xFFFFFFFF - 12;                          // < 4 GiB: giới hạn của FAT32 và của gói MTP 32-bit
+const M_SENSITIVE = ['emummc', 'atmosphere', 'nintendo', 'bootloader'];
+const mStoreInfo = () => mtp.stores.find(s => s.id === mtp.sid);
+const mStoreLabel = s => `${s.name} · ${s.cap ? fmt(s.free) + ' trống / ' + fmt(s.cap) : 'không rõ dung lượng'}${s.acc !== 0 ? ' · chỉ đọc' : ''}`;
+function mCanWrite() { const s = mStoreInfo(); return !!s && s.acc === 0 && /sd card$/i.test(s.name.trim()); }   // loại các kho "install", Saves...
+const mCurParent = () => mtp.stack.length ? mtp.stack[mtp.stack.length - 1].h : 0xFFFFFFFF;
+const mCurPath = () => (mStoreInfo() ? mStoreInfo().name : '') + ['', ...mtp.stack.map(x => x.name)].join('/') + '/';
+function mUpdateToolbar() {
+  const w = mCanWrite();
+  $('mMkdir').disabled = !w; $('mUpload').disabled = !w; $('mUploadDir').disabled = !w;
+  $('mHint').textContent = w ? 'Kho này cho phép ghi. Xoá và ghi đè không thể hoàn tác.' : 'Kho này chỉ đọc trong app (chỉ cho phép ghi vào "SD Card").';
+}
+function mNameError(raw) {
+  const n = raw.trim();
+  if (!n) return 'Tên không được để trống.';
+  if (n.length > 255) return 'Tên dài quá 255 ký tự.';
+  if (M_BADCHARS.test(n)) return 'Tên chứa ký tự không hợp lệ (\\ / : * ? " < > |).';
+  if (n === '.' || n === '..' || /[. ]$/.test(n)) return 'Tên không được kết thúc bằng dấu chấm hoặc khoảng trắng.';
+  return '';
+}
+function mCheckName(raw, ignore) {
+  const e = mNameError(raw); if (e) return e;
+  const n = raw.trim();
+  if (mtp.items.some(i => i !== ignore && i.name.toLowerCase() === n.toLowerCase())) return 'Đã có mục cùng tên trong thư mục này.';
+  return '';
+}
+async function mRefreshStores() {
+  const s = mStoreInfo(); if (!s) return;
+  try {
+    const q = prd((await mTxn(OP.GetStorageInfo, [s.id])).data);
+    q.u16(); q.u16(); s.acc = q.u16(); s.cap = Number(q.u64()); s.free = Number(q.u64());
+    const opt = [...$('mStore').options].find(o => Number(o.value) === s.id); if (opt) opt.textContent = mStoreLabel(s);
+  } catch (_) {}
+}
+async function mRun(fn) {                                   // khoá giao diện trong lúc ghi, rồi nạp lại thư mục và dung lượng
+  if (mtp.dl || !mtp.dev) return;
+  const ctx = mtp.dl = {cancel: false}; mtp.nav++;
+  $('mUp').disabled = true;
+  try { await fn(ctx); }
+  catch (e) { const [t, b] = mExplain(e); showErr(t, b); }
+  finally {
+    mtp.dl = null;
+    if (mtp.dev) { await mRefreshStores(); $('mUp').disabled = !mtp.stack.length; mOpenDir(); }
+  }
+}
+async function mCreate(name, fmtCode, size, parent = mCurParent()) {   // SendObjectInfo -> handle mới
+  const sid = mtp.sid;
+  const attempt = async p => {
+    const info = buildObjectInfo({sid, fmt: fmtCode, size, parent: p, name});
+    return (await mSend(OP.SendObjectInfo, [sid, p], info.length, bufProvider(info))).params[2];
+  };
+  try { return await attempt(parent); }
+  catch (e) { if (parent === 0xFFFFFFFF && e.mtpCode !== undefined) return await attempt(0); throw e; }   // một số thiết bị dùng 0 cho thư mục gốc
+}
+async function mMkdir() {
+  if (!mCanWrite() || mtp.dl) return;
+  const n = prompt('Tên thư mục mới (trong ' + mCurPath() + '):'); if (n === null) return;
+  const err = mCheckName(n); if (err) return showErr('Tên không hợp lệ', err);
+  await mRun(async () => { await mCreate(n.trim(), 0x3001, 0); log('Đã tạo thư mục: ' + mCurPath() + n.trim(), 'o'); });
+}
+async function mRename(it) {
+  if (!mCanWrite() || mtp.dl) return;
+  const n = prompt('Tên mới cho "' + it.name + '":', it.name); if (n === null || n.trim() === it.name) return;
+  const err = mCheckName(n, it); if (err) return showErr('Tên không hợp lệ', err);
+  await mRun(async () => {
+    const d = ptpStr(n.trim());
+    await mSend(0x9804, [it.h, 0xDC07], d.length, bufProvider(d));           // SetObjectPropValue(ObjectFileName)
+    log(`Đã đổi tên: ${it.name} -> ${n.trim()}`, 'o');
+  });
+}
+async function mDelete(it) {
+  if (!mCanWrite() || mtp.dl) return;
+  const path = mCurPath() + it.name + (it.dir ? '/' : '');
+  let count = 0;
+  if (it.dir) { try { count = prd((await mTxn(OP.GetObjectHandles, [mtp.sid, 0, it.h])).data).arr32().length; } catch (_) {} }
+  const top = mtp.stack.length ? mtp.stack[0].name : it.name;
+  const sens = M_SENSITIVE.includes(top.toLowerCase());
+  const msg = `XOÁ VĨNH VIỄN ${it.dir ? 'thư mục' : 'file'}:\n${path}\n` +
+    (it.dir ? `\nThư mục chứa ít nhất ${count} mục trực tiếp (chưa tính thư mục con).\n` : '') +
+    (sens ? '\nCẢNH BÁO: đây là thư mục hệ thống/CFW. Xoá có thể khiến Switch không khởi động được.\n' : '') +
+    '\nKhông có thùng rác, không thể hoàn tác.';
+  if (!confirm(msg)) return;
+  if (it.dir || sens) {
+    const t = prompt(`Gõ lại chính xác tên "${it.name}" để xác nhận xoá:`);
+    if (t !== it.name) return log('Đã huỷ xoá (tên xác nhận không khớp).', 'w');
+  }
+  await mRun(async () => { await mTxn(0x100B, [it.h, 0]); log('Đã xoá: ' + path, 'w'); });     // DeleteObject
+}
+function mFileProvider(f) {                                 // đọc file theo khối, đọc trước khối kế tiếp
+  let off = 0, pend = null;
+  const read = (o, n) => f.slice(o, o + n).arrayBuffer().then(b => new Uint8Array(b));
+  return async want => {
+    const cur = pend && pend.len === want ? pend.p : read(off, want);
+    off += want; pend = null;
+    const nw = Math.min(MCHUNK, f.size - off);
+    if (nw > 0) pend = {len: nw, p: read(off, nw)};
+    return cur;
+  };
+}
+// ---- Tải lên file / thư mục: lập kế hoạch (quét nguồn) -> xác nhận -> thực hiện ----
+const M_JUNK = /^(\.DS_Store|Thumbs\.db|desktop\.ini|\._.*)$/i;       // file rác của hệ điều hành máy tính, bỏ qua
+async function mReadDir(h) {                                          // liệt kê nhanh một thư mục đang có trên Switch
+  const hs = prd((await mTxn(OP.GetObjectHandles, [mtp.sid, 0, h])).data).arr32(), out = [];
+  for (const x of hs) { const o = parseObjectInfo((await mTxn(OP.GetObjectInfo, [x])).data); out.push({h: x, name: o.name, dir: o.fmt === 0x3001}); }
+  return out;
+}
+async function mBuildPlan(entries) {
+  const root = {h: mCurParent(), parent: null}, tasks = [], skipped = [], merged = [];
+  const st = {files: 0, dirs: 0, bytes: 0, ignored: 0};
+  const nameMap = list => new Map(list.map(i => [i.name.toLowerCase(), i]));
+  const addFile = (f, node, names, path) => {
+    if (M_JUNK.test(f.name)) { st.ignored++; return; }
+    const why = f.size > M_MAXFILE ? 'lớn hơn hoặc bằng 4 GiB (chưa hỗ trợ)' : mNameError(f.name);
+    if (why) return skipped.push(`• ${path}${f.name}: ${why}`);
+    if (names.has(f.name.trim().toLowerCase())) return skipped.push(`• ${path}${f.name}: đã tồn tại (không ghi đè)`);
+    names.set(f.name.trim().toLowerCase(), {pending: true});
+    tasks.push({kind: 'file', file: f, node, path: path + f.name}); st.files++; st.bytes += f.size;
+  };
+  const addDir = async (handle, parent, names, path, depth) => {
+    const nm = handle.name, key = nm.trim().toLowerCase(), why = mNameError(nm);
+    if (why) return skipped.push(`• ${path}${nm}/: ${why}`);
+    if (depth > 16) return skipped.push(`• ${path}${nm}/: thư mục lồng quá sâu`);
+    const ex = names.get(key); let node, childNames;
+    if (ex && !ex.dir) return skipped.push(`• ${path}${nm}/: đã có một FILE cùng tên`);
+    if (ex && ex.dir && !ex.pending) { node = {h: ex.h, parent}; childNames = nameMap(await mReadDir(ex.h)); merged.push(path + nm); }
+    else if (ex) return skipped.push(`• ${path}${nm}/: trùng tên với mục khác trong lần chọn này`);
+    else { node = {h: null, parent}; childNames = new Map(); names.set(key, {pending: true}); tasks.push({kind: 'mkdir', node, name: nm.trim(), path: path + nm + '/'}); st.dirs++; }
+    const files = [], dirs = [];
+    for await (const [, h] of handle.entries()) (h.kind === 'file' ? files : dirs).push(h);
+    const cmp = (a, b) => a.name.localeCompare(b.name, undefined, {numeric: true});
+    for (const fh of files.sort(cmp)) { addFile(await fh.getFile(), node, childNames, path + nm + '/'); if (st.files > 20000) throw new Error('Quá nhiều file (hơn 20.000), hãy chia nhỏ.'); }
+    for (const dh of dirs.sort(cmp)) await addDir(dh, node, childNames, path + nm + '/', depth + 1);
+  };
+  const names = nameMap(mtp.items);
+  for (const e of entries) { if (e.kind === 'file') addFile(e.file, root, names, ''); else await addDir(e.handle, root, names, '', 0); }
+  return {tasks, skipped, merged, ...st};
+}
+async function mUploadEntries(entries) {
+  if (!entries.length || mtp.dl || !mtp.dev) return;
+  if (!mCanWrite()) return showErr('Kho này chỉ đọc', 'Chỉ cho phép tải lên kho "SD Card".');
+  const store = mStoreInfo(), hasDir = entries.some(e => e.kind === 'dir');
+  await mRun(async ctx => {
+    $('mDl').hidden = false; $('mDlCancel').textContent = 'Huỷ các file còn lại'; $('mDlBar').style.width = '0%';
+    $('mDlName').textContent = 'Đang quét nguồn...'; mSet('mDlMeta', '');
+    $('mDlCancel').onclick = () => { ctx.cancel = true; mSet('mDlMeta', 'Sẽ dừng sau khi xong file hiện tại...'); };
+    const plan = await mBuildPlan(entries);
+    if (plan.skipped.length) showErr(`Bỏ qua ${plan.skipped.length} mục`, plan.skipped.slice(0, 30).join('\n') + (plan.skipped.length > 30 ? `\n…và ${plan.skipped.length - 30} mục khác` : ''));
+    if (!plan.tasks.length) { $('mDl').hidden = true; return; }
+    if (plan.bytes > store.free) { $('mDl').hidden = true; return showErr('Không đủ dung lượng trên Switch', `Cần ${fmt(plan.bytes)} nhưng chỉ còn ${fmt(store.free)}.`); }
+    if (hasDir) {
+      const msg = `Tải lên vào ${mCurPath()}\n\n• ${plan.files} file (${fmt(plan.bytes)})\n• tạo ${plan.dirs} thư mục mới` +
+        (plan.merged.length ? `\n• gộp vào ${plan.merged.length} thư mục đã có (file trùng tên sẽ bị bỏ qua, không ghi đè)` : '') +
+        (plan.ignored ? `\n• bỏ qua ${plan.ignored} file rác (.DS_Store, Thumbs.db...)` : '') +
+        (plan.skipped.length ? `\n• bỏ qua ${plan.skipped.length} mục không hợp lệ (xem phần lỗi)` : '') + '\n\nTiếp tục?';
+      if (!confirm(msg)) { $('mDl').hidden = true; log('Đã huỷ tải lên.', 'w'); return; }
+    }
+    wakeOn(); const t0 = performance.now(); let done = 0, fi = 0, lastUi = 0;
+    try {
+      for (const t of plan.tasks) {
+        if (ctx.cancel) { log('Đã huỷ các file còn lại.', 'w'); break; }
+        if (t.kind === 'mkdir') {
+          $('mDlName').textContent = 'Tạo thư mục: ' + t.path;
+          try { t.node.h = await mCreate(t.name, 0x3001, 0, t.node.parent.h); }
+          catch (e) { e.message = `${t.path}: ${e.message}`; throw e; }
+          log('Đã tạo thư mục: ' + mCurPath() + t.path, 'o'); continue;
+        }
+        const f = t.file; fi++;
+        $('mDlName').textContent = `Tải lên (${fi}/${plan.files}): ${t.path}`; $('mDlBar').style.width = '0%';
+        log(`MTP tải lên: ${t.path} (${fmt(f.size)})`);
+        try {
+          const h = await mCreate(f.name, 0x3000, f.size, t.node.h);
+          await mSend(OP.SendObject, [], f.size, mFileProvider(f), [0x2001], sent => {
+            const now = performance.now(); if (now - lastUi < 250 && sent < f.size) return; lastUi = now;
+            const all = done + sent, sp = all / ((now - t0) / 1000);
+            $('mDlBar').style.width = (f.size ? sent / f.size * 100 : 100) + '%';
+            mSet('mDlMeta', `${fmt(sent)} / ${fmt(f.size)} · ${(sp / 1048576).toFixed(1)} MB/s · còn ~${fmtDur((plan.bytes - all) / sp)} (cả đợt ${fmt(plan.bytes)})`);
+          });
+          const oi = parseObjectInfo((await mTxn(OP.GetObjectInfo, [h])).data);
+          if (oi.size !== f.size) throw new Error(`kích thước trên Switch (${oi.size}) khác bản gốc (${f.size})`);
+        } catch (e) {
+          e.message = `${t.path}: ${e.message}. File có thể còn dở trên Switch, hãy kiểm tra và xoá rồi thử lại.`;
+          throw e;
+        }
+        done += f.size; log(`MTP tải lên xong: ${t.path}`, 'o');
+      }
+      mSet('mDlMeta', `✓ Xong ${fi} file · ${fmt(done)} · ${fmtDur((performance.now() - t0) / 1000)}`); $('mDlBar').style.width = '100%';
+    } finally { wakeOff(); $('mDlCancel').textContent = 'Huỷ'; }
+  });
+}
+async function mUploadPick() {
+  if (!window.showOpenFilePicker) return showErr('Trình duyệt không hỗ trợ', 'Cần Chrome hoặc Edge bản mới. Bạn có thể kéo thả file vào danh sách.');
+  try { const fl = await Promise.all((await showOpenFilePicker({multiple: true})).map(h => h.getFile())); await mUploadEntries(fl.map(file => ({kind: 'file', file}))); }
+  catch (e) { if (e.name !== 'AbortError') showErr('Không đọc được file đã chọn', e.message); }
+}
+async function mUploadDirPick() {
+  if (!window.showDirectoryPicker) return showErr('Trình duyệt không hỗ trợ', 'Cần Chrome hoặc Edge bản mới.');
+  try { await mUploadEntries([{kind: 'dir', handle: await showDirectoryPicker({mode: 'read'})}]); }
+  catch (e) { if (e.name !== 'AbortError') showErr('Không đọc được thư mục đã chọn', e.message); }
+}
+const mBrowser = $('mBrowser');
+mBrowser.ondragover = e => { e.preventDefault(); if (mCanWrite()) mBrowser.classList.add('dropping'); };
+mBrowser.ondragleave = () => mBrowser.classList.remove('dropping');
+mBrowser.ondrop = e => {
+  e.preventDefault(); mBrowser.classList.remove('dropping');
+  const jobs = [...e.dataTransfer.items].filter(i => i.kind === 'file').map(i => ({         // phải đọc đồng bộ trong sự kiện drop
+    h: i.getAsFileSystemHandle ? i.getAsFileSystemHandle() : Promise.resolve(null), f: i.getAsFile()}));
+  (async () => {
+    const entries = [];
+    for (const j of jobs) {
+      let h = null; try { h = await j.h; } catch (_) {}
+      if (h && h.kind === 'directory') entries.push({kind: 'dir', handle: h}); else if (j.f) entries.push({kind: 'file', file: j.f});
+    }
+    mUploadEntries(entries);
+  })();
+};
+$('mMkdir').onclick = mMkdir;
+$('mUpload').onclick = mUploadPick;
+$('mUploadDir').onclick = mUploadDirPick;
+if (!window.showDirectoryPicker) $('mUploadDir').style.display = 'none';
+
+$('mConnect').onclick = mConnect;
+$('mDisc').onclick = mDisconnect;
+$('mRefresh').onclick = () => { if (mtp.dev && !mtp.dl) mOpenDir(); };
+$('mUp').onclick = () => { if (mtp.dl) return; mtp.stack.pop(); mOpenDir(); };
+$('mStore').onchange = e => { if (mtp.dl) { e.target.value = mtp.sid; return; } mtp.sid = Number(e.target.value); mtp.stack = []; mUpdateToolbar(); mOpenDir(); };
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  for (const id of ['tabInstall', 'tabMtp']) $(id).hidden = id !== b.dataset.tab;
+  $('hdrStat').hidden = b.dataset.tab !== 'tabInstall';
+  hideErr();
+});
+if ('usb' in navigator) navigator.usb.addEventListener('disconnect', ev => {
+  if (mtp.dev && ev.device === mtp.dev) { showErr('Switch đã bị ngắt kết nối', 'Thiết bị MTP biến mất (rút cáp hoặc DBI thoát chế độ MTP).'); mCleanup(); }
+});
 
 // ---- Sự kiện ----
 $('btnConnect').onclick = () => {
